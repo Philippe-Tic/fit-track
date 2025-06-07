@@ -1,4 +1,4 @@
-npm# FitTrack - Personal Fitness Tracker
+# FitTrack - Personal Fitness Tracker
 
 A modern, responsive web application for tracking your daily fitness journey. Built with React, TypeScript, Tailwind CSS, and Supabase.
 
