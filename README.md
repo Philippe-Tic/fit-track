@@ -1,4 +1,4 @@
-# FitTrack - Personal Fitness Tracker
+npm# FitTrack - Personal Fitness Tracker
 
 A modern, responsive web application for tracking your daily fitness journey. Built with React, TypeScript, Tailwind CSS, and Supabase.
 
@@ -146,7 +146,7 @@ The application will be available at `http://localhost:5173`
 
 1. **Select a Date**: Click on any date in the calendar
 2. **Add Weight**: Enter your daily weight in kg
-3. **Log Meals**: 
+3. **Log Meals**:
    - Click "Ajouter un repas" to add a meal
    - Add a photo (optional) and description
    - Save your entry

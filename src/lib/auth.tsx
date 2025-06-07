@@ -1,98 +1,97 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { supabase, Profile } from './supabase';
-import { Session, User } from '@supabase/supabase-js';
+import { Session } from '@supabase/supabase-js';
+import React, { createContext, useContext, useEffect, useReducer } from 'react';
+import { supabase } from './supabase';
+import { AuthAction, AuthContextType, AuthState } from './types/auth';
+import { fetchProfile, isSessionExpired } from './utils/auth';
 
-type AuthContextType = {
-  session: Session | null;
-  user: User | null;
-  profile: Profile | null;
-  signIn: (email: string, password: string) => Promise<void>;
-  signInWithGoogle: () => Promise<void>;
-  signUp: (email: string, password: string, fullName: string) => Promise<void>;
-  signOut: () => Promise<void>;
-  loading: boolean;
+const initialState: AuthState = {
+  session: null,
+  user: null,
+  profile: null,
+  loading: true,
+  error: null,
 };
+
+function authReducer(state: AuthState, action: AuthAction): AuthState {
+  switch (action.type) {
+    case 'SET_SESSION':
+      return { ...state, session: action.payload };
+    case 'SET_USER':
+      return { ...state, user: action.payload };
+    case 'SET_PROFILE':
+      return { ...state, profile: action.payload };
+    case 'SET_LOADING':
+      return { ...state, loading: action.payload };
+    case 'SET_ERROR':
+      return { ...state, error: action.payload };
+    case 'RESET':
+      return initialState;
+    default:
+      return state;
+  }
+}
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [session, setSession] = useState<Session | null>(null);
-  const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [state, dispatch] = useReducer(authReducer, initialState);
+  const { session, user, profile, loading, error } = state;
 
   useEffect(() => {
     let mounted = true;
 
-    const fetchSession = async () => {
-      try {
-        const { data: { session: currentSession }, error } = await supabase.auth.getSession();
-        
-        if (error) {
-          console.error('Error getting session:', error);
-          if (mounted) {
-            setLoading(false);
-          }
+    const handleSession = async (currentSession: Session | null) => {
+      if (!mounted) return;
+
+      if (!currentSession) {
+        dispatch({ type: 'RESET' });
+        return;
+      }
+
+      // Check if session is expired
+      if (isSessionExpired(currentSession.expires_at)) {
+        const { data: { session: refreshedSession }, error: refreshError } =
+          await supabase.auth.refreshSession();
+
+        if (refreshError || !refreshedSession) {
+          dispatch({ type: 'SET_ERROR', payload: refreshError?.message || 'Session refresh failed' });
+          dispatch({ type: 'RESET' });
           return;
         }
 
-        if (mounted) {
-          setSession(currentSession);
-          setUser(currentSession?.user ?? null);
-          
-          if (currentSession?.user) {
-            await fetchProfile(currentSession.user.id);
-          }
-          
-          setLoading(false);
+        dispatch({ type: 'SET_SESSION', payload: refreshedSession });
+        dispatch({ type: 'SET_USER', payload: refreshedSession.user });
+
+        try {
+          const userProfile = await fetchProfile(refreshedSession.user.id);
+          dispatch({ type: 'SET_PROFILE', payload: userProfile });
+        } catch (error) {
+          dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'Failed to fetch profile' });
         }
-      } catch (error) {
-        console.error('Error in fetchSession:', error);
-        if (mounted) {
-          setLoading(false);
+      } else {
+        dispatch({ type: 'SET_SESSION', payload: currentSession });
+        dispatch({ type: 'SET_USER', payload: currentSession.user });
+
+        try {
+          const userProfile = await fetchProfile(currentSession.user.id);
+          dispatch({ type: 'SET_PROFILE', payload: userProfile });
+        } catch (error) {
+          dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'Failed to fetch profile' });
         }
       }
+
+      dispatch({ type: 'SET_LOADING', payload: false });
     };
 
-    const fetchProfile = async (userId: string) => {
-      try {
-        const { data: profileData, error } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', userId)
-          .single();
-        
-        if (error && error.code !== 'PGRST116') {
-          console.error('Error fetching profile:', error);
-          return;
-        }
+    // Initial session check
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      handleSession(session);
+    });
 
-        if (mounted) {
-          setProfile(profileData || null);
-        }
-      } catch (error) {
-        console.error('Error in fetchProfile:', error);
-      }
-    };
-
-    fetchSession();
-
+    // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, newSession) => {
-        console.log('Auth state changed:', event, newSession?.user?.id);
-        
-        if (mounted) {
-          setSession(newSession);
-          setUser(newSession?.user ?? null);
-          
-          if (newSession?.user) {
-            await fetchProfile(newSession.user.id);
-          } else {
-            setProfile(null);
-          }
-          
-          setLoading(false);
-        }
+        handleSession(newSession);
       }
     );
 
@@ -103,54 +102,66 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-  };
+    dispatch({ type: 'SET_LOADING', payload: true });
+    dispatch({ type: 'SET_ERROR', payload: null });
 
-  const signInWithGoogle = async () => {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        queryParams: {
-          access_type: 'offline',
-          prompt: 'consent',
-        },
-        redirectTo: `${window.location.origin}`,
-      },
-    });
-    if (error) throw error;
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+    } catch (error) {
+      dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'Sign in failed' });
+      throw error;
+    } finally {
+      dispatch({ type: 'SET_LOADING', payload: false });
+    }
   };
 
   const signUp = async (email: string, password: string, fullName: string) => {
-    const { error, data } = await supabase.auth.signUp({ 
-      email, 
-      password,
-      options: {
-        data: {
-          full_name: fullName,
+    dispatch({ type: 'SET_LOADING', payload: true });
+    dispatch({ type: 'SET_ERROR', payload: null });
+
+    try {
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { full_name: fullName },
         },
-      },
-    });
-    
-    if (error) throw error;
-    
-    // Le profil sera créé automatiquement par le trigger de la base de données
+      });
+      if (error) throw error;
+    } catch (error) {
+      dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'Sign up failed' });
+      throw error;
+    } finally {
+      dispatch({ type: 'SET_LOADING', payload: false });
+    }
   };
 
   const signOut = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
+    dispatch({ type: 'SET_LOADING', payload: true });
+    dispatch({ type: 'SET_ERROR', payload: null });
+
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      dispatch({ type: 'RESET' });
+    } catch (error) {
+      dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'Sign out failed' });
+      throw error;
+    } finally {
+      dispatch({ type: 'SET_LOADING', payload: false });
+    }
   };
 
-  const value = {
+  const value: AuthContextType = {
     session,
     user,
     profile,
     signIn,
-    signInWithGoogle,
     signUp,
     signOut,
     loading,
+    error,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

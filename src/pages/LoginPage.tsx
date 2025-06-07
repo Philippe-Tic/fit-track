@@ -1,9 +1,8 @@
+import { Activity } from 'lucide-react';
 import React, { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import AuthForm from '../components/AuthForm';
 import { useAuth } from '../lib/auth';
-import { Activity } from 'lucide-react';
 
 const LoginPage: React.FC = () => {
   const { user, loading } = useAuth();
@@ -34,9 +33,9 @@ const LoginPage: React.FC = () => {
           Suivez votre progression et atteignez vos objectifs
         </p>
       </div>
-      
+
       <AuthForm mode="signin" />
-      
+
       <p className="mt-6 text-center text-sm text-gray-600">
         Pas encore de compte ?{' '}
         <Link to="/register" className="font-medium text-teal-600 hover:text-teal-500">
