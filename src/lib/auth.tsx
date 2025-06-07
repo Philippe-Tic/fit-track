@@ -43,14 +43,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const handleSession = async (currentSession: Session | null) => {
       if (!mounted) return;
 
-      console.log('[Auth] handleSession called:', {
-        hasSession: !!currentSession,
-        userId: currentSession?.user?.id,
-        mounted
-      });
-
       if (!currentSession) {
-        console.log('[Auth] No session, resetting state');
         dispatch({ type: 'RESET' });
         dispatch({ type: 'SET_LOADING', payload: false });
         return;
@@ -59,57 +52,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         // Check if session is expired
         if (isSessionExpired(currentSession.expires_at)) {
-          console.log('[Auth] Session expired, attempting refresh');
           const { data: { session: refreshedSession }, error: refreshError } =
             await supabase.auth.refreshSession();
 
           if (refreshError || !refreshedSession) {
-            console.error('[Auth] Session refresh failed:', refreshError);
             dispatch({ type: 'SET_ERROR', payload: refreshError?.message || 'Session refresh failed' });
             dispatch({ type: 'RESET' });
             dispatch({ type: 'SET_LOADING', payload: false });
             return;
           }
 
-          console.log('[Auth] Session refreshed successfully');
           dispatch({ type: 'SET_SESSION', payload: refreshedSession });
           dispatch({ type: 'SET_USER', payload: refreshedSession.user });
 
           try {
-            console.log('[Auth] Fetching profile after refresh');
             const userProfile = await fetchProfile(refreshedSession.user.id);
-            console.log('[Auth] Profile fetched:', userProfile);
             dispatch({ type: 'SET_PROFILE', payload: userProfile });
           } catch (error) {
-            console.error('[Auth] Profile fetch failed:', error);
             dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'Failed to fetch profile' });
           }
         } else {
-          console.log('[Auth] Session valid, proceeding with profile fetch');
           dispatch({ type: 'SET_SESSION', payload: currentSession });
           dispatch({ type: 'SET_USER', payload: currentSession.user });
 
           try {
             const userProfile = await fetchProfile(currentSession.user.id);
-            console.log('[Auth] Profile fetched:', userProfile);
             dispatch({ type: 'SET_PROFILE', payload: userProfile });
           } catch (error) {
-            console.error('[Auth] Profile fetch failed:', error);
             dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'Failed to fetch profile' });
           }
         }
       } catch (error) {
-        console.error('[Auth] Unexpected error in handleSession:', error);
         dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'An unexpected error occurred' });
         dispatch({ type: 'RESET' });
       } finally {
-        console.log('[Auth] Setting loading to false');
         dispatch({ type: 'SET_LOADING', payload: false });
       }
     };
 
     // Initial session check
-    console.log('[Auth] Performing initial session check');
     supabase.auth.getSession().then(({ data: { session } }) => {
       handleSession(session);
     });
@@ -117,7 +98,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, newSession) => {
-        console.log('[Auth] Auth state changed:', { event, hasSession: !!newSession });
         handleSession(newSession);
       }
     );

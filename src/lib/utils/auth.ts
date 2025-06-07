@@ -22,15 +22,11 @@ export const createProfile = async (userId: string, email: string, fullName?: st
 };
 
 export const fetchProfile = async (userId: string): Promise<Profile | null> => {
-  console.log('[Auth] fetchProfile called for user:', userId);
-
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) {
-    console.error('[Auth] No valid session found in fetchProfile');
     throw new Error('No valid session found');
   }
 
-  console.log('[Auth] Attempting to fetch profile from Supabase');
   const { data: profileData, error } = await supabase
     .from('profiles')
     .select('*')
@@ -38,13 +34,7 @@ export const fetchProfile = async (userId: string): Promise<Profile | null> => {
     .single();
 
   if (error) {
-    console.log('[Auth] Profile fetch error:', {
-      code: error.code,
-      message: error.message
-    });
-
     if (error.code === 'PGRST116') {
-      console.log('[Auth] Profile not found, creating new profile');
       return createProfile(
         userId,
         session.user.email || '',
@@ -54,7 +44,6 @@ export const fetchProfile = async (userId: string): Promise<Profile | null> => {
     throw error;
   }
 
-  console.log('[Auth] Profile fetched successfully:', profileData);
   return profileData;
 };
 
