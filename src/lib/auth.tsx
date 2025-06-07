@@ -22,48 +22,82 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let mounted = true;
+
     const fetchSession = async () => {
-      const { data } = await supabase.auth.getSession();
-      setSession(data.session);
-      setUser(data.session?.user ?? null);
-      
-      if (data.session?.user) {
-        const { data: profileData } = await supabase
+      try {
+        const { data: { session: currentSession }, error } = await supabase.auth.getSession();
+        
+        if (error) {
+          console.error('Error getting session:', error);
+          if (mounted) {
+            setLoading(false);
+          }
+          return;
+        }
+
+        if (mounted) {
+          setSession(currentSession);
+          setUser(currentSession?.user ?? null);
+          
+          if (currentSession?.user) {
+            await fetchProfile(currentSession.user.id);
+          }
+          
+          setLoading(false);
+        }
+      } catch (error) {
+        console.error('Error in fetchSession:', error);
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    const fetchProfile = async (userId: string) => {
+      try {
+        const { data: profileData, error } = await supabase
           .from('profiles')
           .select('*')
-          .eq('id', data.session.user.id)
+          .eq('id', userId)
           .single();
         
-        setProfile(profileData);
+        if (error && error.code !== 'PGRST116') {
+          console.error('Error fetching profile:', error);
+          return;
+        }
+
+        if (mounted) {
+          setProfile(profileData || null);
+        }
+      } catch (error) {
+        console.error('Error in fetchProfile:', error);
       }
-      
-      setLoading(false);
     };
 
     fetchSession();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, newSession) => {
-        setSession(newSession);
-        setUser(newSession?.user ?? null);
+        console.log('Auth state changed:', event, newSession?.user?.id);
         
-        if (newSession?.user) {
-          const { data: profileData } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', newSession.user.id)
-            .single();
+        if (mounted) {
+          setSession(newSession);
+          setUser(newSession?.user ?? null);
           
-          setProfile(profileData);
-        } else {
-          setProfile(null);
+          if (newSession?.user) {
+            await fetchProfile(newSession.user.id);
+          } else {
+            setProfile(null);
+          }
+          
+          setLoading(false);
         }
-        
-        setLoading(false);
       }
     );
 
     return () => {
+      mounted = false;
       subscription.unsubscribe();
     };
   }, []);
@@ -81,7 +115,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           access_type: 'offline',
           prompt: 'consent',
         },
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: `${window.location.origin}`,
       },
     });
     if (error) throw error;
@@ -100,13 +134,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     
     if (error) throw error;
     
-    if (data.user) {
-      await supabase.from('profiles').insert({
-        id: data.user.id,
-        email,
-        full_name: fullName,
-      });
-    }
+    // Le profil sera créé automatiquement par le trigger de la base de données
   };
 
   const signOut = async () => {

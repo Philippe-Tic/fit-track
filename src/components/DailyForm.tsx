@@ -26,70 +26,72 @@ const DailyForm: React.FC<DailyFormProps> = ({ date, onUpdate }) => {
       setLoading(true);
       const formattedDate = format(date, 'yyyy-MM-dd');
       
-      // Get or create daily entry
-      let { data: entryData, error: entryError } = await supabase
-        .from('daily_entries')
-        .select('*')
-        .eq('user_id', user.id)
-        .eq('date', formattedDate)
-        .single();
-      
-      if (entryError && entryError.code === 'PGRST116') {
-        // No entry found, create a new one
-        const { data: newEntry, error: createError } = await supabase
+      try {
+        // Get or create daily entry
+        let { data: entryData, error: entryError } = await supabase
           .from('daily_entries')
-          .insert({
-            user_id: user.id,
-            date: formattedDate,
-          })
-          .select()
+          .select('*')
+          .eq('user_id', user.id)
+          .eq('date', formattedDate)
           .single();
         
-        if (createError) {
-          console.error('Error creating daily entry:', createError);
+        if (entryError && entryError.code === 'PGRST116') {
+          // No entry found, create a new one
+          const { data: newEntry, error: createError } = await supabase
+            .from('daily_entries')
+            .insert({
+              user_id: user.id,
+              date: formattedDate,
+            })
+            .select()
+            .single();
+          
+          if (createError) {
+            console.error('Error creating daily entry:', createError);
+            setLoading(false);
+            return;
+          }
+          
+          entryData = newEntry;
+        } else if (entryError) {
+          console.error('Error fetching daily entry:', entryError);
           setLoading(false);
           return;
         }
         
-        entryData = newEntry;
-      } else if (entryError) {
-        console.error('Error fetching daily entry:', entryError);
+        setDailyEntry(entryData);
+        setWeight(entryData.weight ? entryData.weight.toString() : '');
+        
+        // Fetch meals
+        const { data: mealsData, error: mealsError } = await supabase
+          .from('meal_entries')
+          .select('*')
+          .eq('daily_entry_id', entryData.id)
+          .order('created_at', { ascending: true });
+        
+        if (mealsError) {
+          console.error('Error fetching meals:', mealsError);
+        } else {
+          setMeals(mealsData || []);
+        }
+        
+        // Fetch workouts
+        const { data: workoutsData, error: workoutsError } = await supabase
+          .from('workout_entries')
+          .select('*')
+          .eq('daily_entry_id', entryData.id)
+          .order('created_at', { ascending: true });
+        
+        if (workoutsError) {
+          console.error('Error fetching workouts:', workoutsError);
+        } else {
+          setWorkouts(workoutsData || []);
+        }
+      } catch (error) {
+        console.error('Error in fetchDailyData:', error);
+      } finally {
         setLoading(false);
-        return;
       }
-      
-      setDailyEntry(entryData);
-      if (entryData.weight) {
-        setWeight(entryData.weight.toString());
-      }
-      
-      // Fetch meals
-      const { data: mealsData, error: mealsError } = await supabase
-        .from('meal_entries')
-        .select('*')
-        .eq('daily_entry_id', entryData.id)
-        .order('created_at', { ascending: true });
-      
-      if (mealsError) {
-        console.error('Error fetching meals:', mealsError);
-      } else {
-        setMeals(mealsData || []);
-      }
-      
-      // Fetch workouts
-      const { data: workoutsData, error: workoutsError } = await supabase
-        .from('workout_entries')
-        .select('*')
-        .eq('daily_entry_id', entryData.id)
-        .order('created_at', { ascending: true });
-      
-      if (workoutsError) {
-        console.error('Error fetching workouts:', workoutsError);
-      } else {
-        setWorkouts(workoutsData || []);
-      }
-      
-      setLoading(false);
     };
     
     fetchDailyData();
@@ -101,115 +103,182 @@ const DailyForm: React.FC<DailyFormProps> = ({ date, onUpdate }) => {
     setSaving(true);
     
     try {
-      // Update weight
-      if (weight) {
-        await supabase
+      // Update weight if provided
+      if (weight && weight.trim() !== '') {
+        const { error: weightError } = await supabase
           .from('daily_entries')
-          .update({ weight: parseFloat(weight) })
+          .update({ 
+            weight: parseFloat(weight),
+            updated_at: new Date().toISOString()
+          })
           .eq('id', dailyEntry.id);
+        
+        if (weightError) {
+          console.error('Error updating weight:', weightError);
+        }
       }
       
-      // Process meals with images
+      // Process meals
       for (const meal of meals) {
-        if (meal.file) {
-          const fileName = `${user.id}/${Date.now()}-${meal.file.name}`;
+        if (meal.id.startsWith('new-')) {
+          // Create new meal entry
+          let imageUrl = null;
           
-          const { error: uploadError } = await supabase.storage
-            .from('meal_images')
-            .upload(fileName, meal.file);
-          
-          if (uploadError) {
-            console.error('Error uploading meal image:', uploadError);
-            continue;
+          if (meal.file) {
+            const fileName = `${user.id}/${Date.now()}-${meal.file.name}`;
+            
+            const { error: uploadError } = await supabase.storage
+              .from('meal_images')
+              .upload(fileName, meal.file);
+            
+            if (!uploadError) {
+              const { data: urlData } = supabase.storage
+                .from('meal_images')
+                .getPublicUrl(fileName);
+              
+              imageUrl = urlData.publicUrl;
+            }
           }
           
-          const { data: urlData } = supabase.storage
-            .from('meal_images')
-            .getPublicUrl(fileName);
-          
-          if (meal.id.startsWith('new-')) {
-            // Create new meal entry
-            await supabase.from('meal_entries').insert({
+          const { error: insertError } = await supabase
+            .from('meal_entries')
+            .insert({
               daily_entry_id: dailyEntry.id,
               description: meal.description,
-              image_url: urlData.publicUrl,
+              image_url: imageUrl,
             });
-          } else {
-            // Update existing meal entry
-            await supabase
-              .from('meal_entries')
-              .update({ 
-                description: meal.description,
-                image_url: urlData.publicUrl,
-              })
-              .eq('id', meal.id);
+          
+          if (insertError) {
+            console.error('Error creating meal:', insertError);
           }
-        } else if (meal.id.startsWith('new-')) {
-          // Create new meal entry without image
-          await supabase.from('meal_entries').insert({
-            daily_entry_id: dailyEntry.id,
-            description: meal.description,
-          });
         } else {
-          // Update existing meal entry without changing image
-          await supabase
+          // Update existing meal entry
+          let updateData: any = { description: meal.description };
+          
+          if (meal.file) {
+            const fileName = `${user.id}/${Date.now()}-${meal.file.name}`;
+            
+            const { error: uploadError } = await supabase.storage
+              .from('meal_images')
+              .upload(fileName, meal.file);
+            
+            if (!uploadError) {
+              const { data: urlData } = supabase.storage
+                .from('meal_images')
+                .getPublicUrl(fileName);
+              
+              updateData.image_url = urlData.publicUrl;
+            }
+          }
+          
+          const { error: updateError } = await supabase
             .from('meal_entries')
-            .update({ description: meal.description })
+            .update(updateData)
             .eq('id', meal.id);
+          
+          if (updateError) {
+            console.error('Error updating meal:', updateError);
+          }
         }
       }
       
-      // Process workouts with images
+      // Process workouts
       for (const workout of workouts) {
-        if (workout.file) {
-          const fileName = `${user.id}/${Date.now()}-${workout.file.name}`;
+        if (workout.id.startsWith('new-')) {
+          // Create new workout entry
+          let imageUrl = null;
           
-          const { error: uploadError } = await supabase.storage
-            .from('workout_images')
-            .upload(fileName, workout.file);
-          
-          if (uploadError) {
-            console.error('Error uploading workout image:', uploadError);
-            continue;
+          if (workout.file) {
+            const fileName = `${user.id}/${Date.now()}-${workout.file.name}`;
+            
+            const { error: uploadError } = await supabase.storage
+              .from('workout_images')
+              .upload(fileName, workout.file);
+            
+            if (!uploadError) {
+              const { data: urlData } = supabase.storage
+                .from('workout_images')
+                .getPublicUrl(fileName);
+              
+              imageUrl = urlData.publicUrl;
+            }
           }
           
-          const { data: urlData } = supabase.storage
-            .from('workout_images')
-            .getPublicUrl(fileName);
-          
-          if (workout.id.startsWith('new-')) {
-            // Create new workout entry
-            await supabase.from('workout_entries').insert({
+          const { error: insertError } = await supabase
+            .from('workout_entries')
+            .insert({
               daily_entry_id: dailyEntry.id,
               description: workout.description,
-              image_url: urlData.publicUrl,
+              image_url: imageUrl,
             });
-          } else {
-            // Update existing workout entry
-            await supabase
-              .from('workout_entries')
-              .update({ 
-                description: workout.description,
-                image_url: urlData.publicUrl,
-              })
-              .eq('id', workout.id);
+          
+          if (insertError) {
+            console.error('Error creating workout:', insertError);
           }
-        } else if (workout.id.startsWith('new-')) {
-          // Create new workout entry without image
-          await supabase.from('workout_entries').insert({
-            daily_entry_id: dailyEntry.id,
-            description: workout.description,
-          });
         } else {
-          // Update existing workout entry without changing image
-          await supabase
+          // Update existing workout entry
+          let updateData: any = { description: workout.description };
+          
+          if (workout.file) {
+            const fileName = `${user.id}/${Date.now()}-${workout.file.name}`;
+            
+            const { error: uploadError } = await supabase.storage
+              .from('workout_images')
+              .upload(fileName, workout.file);
+            
+            if (!uploadError) {
+              const { data: urlData } = supabase.storage
+                .from('workout_images')
+                .getPublicUrl(fileName);
+              
+              updateData.image_url = urlData.publicUrl;
+            }
+          }
+          
+          const { error: updateError } = await supabase
             .from('workout_entries')
-            .update({ description: workout.description })
+            .update(updateData)
             .eq('id', workout.id);
+          
+          if (updateError) {
+            console.error('Error updating workout:', updateError);
+          }
         }
       }
       
+      // Refresh the data
       onUpdate();
+      
+      // Reload the current data
+      const formattedDate = format(date, 'yyyy-MM-dd');
+      const { data: updatedEntry } = await supabase
+        .from('daily_entries')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('date', formattedDate)
+        .single();
+      
+      if (updatedEntry) {
+        setDailyEntry(updatedEntry);
+        setWeight(updatedEntry.weight ? updatedEntry.weight.toString() : '');
+      }
+      
+      // Reload meals and workouts
+      const { data: updatedMeals } = await supabase
+        .from('meal_entries')
+        .select('*')
+        .eq('daily_entry_id', dailyEntry.id)
+        .order('created_at', { ascending: true });
+      
+      const { data: updatedWorkouts } = await supabase
+        .from('workout_entries')
+        .select('*')
+        .eq('daily_entry_id', dailyEntry.id)
+        .order('created_at', { ascending: true });
+      
+      setMeals(updatedMeals || []);
+      setWorkouts(updatedWorkouts || []);
+      
     } catch (error) {
       console.error('Error saving daily data:', error);
     } finally {
@@ -278,8 +347,12 @@ const DailyForm: React.FC<DailyFormProps> = ({ date, onUpdate }) => {
       setMeals(meals.filter((meal) => meal.id !== id));
     } else {
       try {
-        await supabase.from('meal_entries').delete().eq('id', id);
-        setMeals(meals.filter((meal) => meal.id !== id));
+        const { error } = await supabase.from('meal_entries').delete().eq('id', id);
+        if (error) {
+          console.error('Error removing meal:', error);
+        } else {
+          setMeals(meals.filter((meal) => meal.id !== id));
+        }
       } catch (error) {
         console.error('Error removing meal:', error);
       }
@@ -291,8 +364,12 @@ const DailyForm: React.FC<DailyFormProps> = ({ date, onUpdate }) => {
       setWorkouts(workouts.filter((workout) => workout.id !== id));
     } else {
       try {
-        await supabase.from('workout_entries').delete().eq('id', id);
-        setWorkouts(workouts.filter((workout) => workout.id !== id));
+        const { error } = await supabase.from('workout_entries').delete().eq('id', id);
+        if (error) {
+          console.error('Error removing workout:', error);
+        } else {
+          setWorkouts(workouts.filter((workout) => workout.id !== id));
+        }
       } catch (error) {
         console.error('Error removing workout:', error);
       }
